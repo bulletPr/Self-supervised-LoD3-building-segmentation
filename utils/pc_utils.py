@@ -21,7 +21,8 @@
 # ----------------------------------------
 import numpy as np
 import h5py
-from skimage import color
+import sys
+#from skimage import color
 
 import os.path
 
@@ -29,7 +30,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.append(ROOT_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'pre_hdf5'))
-import common
+#import common
 # ----------------------------------------
 # Point cloud argument
 # ----------------------------------------
@@ -53,14 +54,18 @@ def rotate_pointcloud(pointcloud):
     pointcloud[:,[0,2]] = pointcloud[:,[0,2]].dot(rotation_matrix) # random rotation (x,z)
     return pointcloud
 
+
+'''
 def rgb_t_hsv(points_colors):
     points_colors[:,0:3] /= 255.0
     color.rgb2hsv(points_colors)
     return points_colors
+'''
 
 def getshiftedpc(point_set):
     xyz_min = np.amin(point_set, axis=0)[0:3]
     return xyz_min
+
 
 def norm_rgb(points_colors):
     points_colors[:,0:3] /= 255.0
@@ -140,46 +145,25 @@ def save_h5(h5_filename, data, label, data_dtype='uint8', label_dtype='uint8'):
             dtype=label_dtype)
     h5_fout.close()
 
-# Read numpy array data and label from h5_filename
-def load_h5_data_label_normal(h5_filename):
-    f = h5py.File(h5_filename)
-    data = f['data'][:]
-    label = f['label'][:]
-    normal = f['normal'][:]
-    return (data, label, normal)
 
-# Read numpy array data and label from h5_filename
-def load_h5_data_label_seg(h5_filename):
-    f = h5py.File(h5_filename)
-    data = f['data'][:]
-    label = f['label'][:]
-    seg = f['pid'][:]
-    return (data, label, seg)
-
-# Read numpy array data and label from h5_filename
-def load_h5_rgb(h5_filename):
-    f = h5py.File(h5_filename, 'r')
-    data = f['data'][...].astype(np.float32)
-    label = f['label_seg'][...].astype(np.int64)
-    return (np.concatenate(data, axis=0),
-            np.concatenate(label, axis=0))
-
-def load_sampled_h5_seg(filelist):
+def load_sampled_h5_seg(filelist, dims=3, split='train'):
     points = []
     labels_seg = []
     folder = os.path.dirname(filelist)
     for line in open(filelist):
         print("Load file: " + str(line))
         data = h5py.File(os.path.join(folder, line.strip()), 'r')
-        points.append(data['data'][:,:,0:3].astype(np.float32))
-        if 'label_seg' in data:
-            labels_seg.append(data['label_seg'][...].astype(np.int64))
+        if split=='test':
+            points.append(data['data'][:,:,0:dims+3].astype(np.float32))
         else:
-            labels_seg.append(data['label'][...].astype(np.int64))
+            points.append(data['data'][:,:,3:dims+3].astype(np.float32))
+                
+        labels_seg.append(data['label_seg'][...].astype(np.int64))
         data.close()
 
     return (np.concatenate(points, axis=0),
             np.concatenate(labels_seg, axis=0))
+
 
 def load_cls(filelist):
     points = []
@@ -196,12 +180,6 @@ def load_cls(filelist):
         labels.append(np.squeeze(data['label'][:]).astype(np.int64))
     return (np.concatenate(points, axis=0),
             np.concatenate(labels, axis=0))
-
-
-def load_cls_train_val(filelist, filelist_val):
-    data_train, label_train = grouped_shuffle(load_cls(filelist))
-    data_val, label_val = load_cls(filelist_val)
-    return data_train, label_train, data_val, label_val
 
 
 def is_h5_list(filelist):
