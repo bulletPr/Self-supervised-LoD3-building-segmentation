@@ -21,30 +21,20 @@
 # ----------------------------------------
 import math
 import sys
+import os.path
 import numpy as np
+import multiprocessing
+import h5py
+import argparse
+import numpy as np
+from datetime import datetime
 
-def get_rotate_preprocess(create_labels=True):
-  """Returns a function that does 90deg rotations and sets according labels."""
-
-  def _four_rots(img):
-    # We use our own instead of tf.image.rot90 because that one broke
-    # internally shortly before deadline...
-    return tf.stack([
-        img,
-        tf.transpose(tf.reverse_v2(img, [1]), [1, 0, 2]),
-        tf.reverse_v2(img, [0, 1]),
-        tf.reverse_v2(tf.transpose(img, [1, 0, 2]), [1]),
-    ])
-
-  def _rotate_pp(data):
-    # Create labels in the same structure as images!
-    if create_labels:
-      data["label"] = utils.tf_apply_to_image_or_images(
-          lambda _: tf.constant([0, 1, 2, 3]), data["image"], dtype=tf.int32)
-    data["image"] = utils.tf_apply_to_image_or_images(_four_rots, data["image"])
-    return data
-
-  return _rotate_pp
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(ROOT_DIR)
+sys.path.append(os.path.join(ROOT_DIR, 'utils'))
+import pc_utils
+sys.path.append(os.path.join(ROOT_DIR,'data_preprocessing'))
+import arch_dataloader
 
 def euler2mat(z=0, y=0, x=0):
     ''' Return matrix for rotations around z, y and x axes
@@ -192,7 +182,7 @@ def mat2euler(M, cy_thresh=None):
         x = 0.0
     return z, y, x
 
-def apply_rotation(xrot=0, yrot=0, zrot=0, input_points, switch_xyz=[0,1,2], normalize=True): 
+def apply_rotation(input_points, xrot=0, yrot=0, zrot=0, switch_xyz=[0,1,2], normalize=True):
     # Rotate the point cloud along up direction with certain angle.
     # Rotate in the order of x, y and then z.
     # Input:
@@ -311,13 +301,69 @@ def rotation_multiprocessing_wrapper(func, batch_data, label, *args, num_workers
     return result
 
 
-def rotate_pc(input_points, NUM_CLASSES):
+def rotate_pc(current_data, NUM_CLASSES):
     current_data = np.repeat(current_data, NUM_CLASSES, axis=0) # (B,N,3) -> (B*NUM_CLASSES,N,3)
     print(f'Expanded data shape: {current_data.shape}')
     current_label = np.tile(np.arange(NUM_CLASSES), int(current_data.shape[0]//NUM_CLASSES))
-    current_data = rotation_multiprocessing_wrapper(rotate_point_by_label, current_data, current_label_without_y)
-    current_data, current_label, _ = pc_utils.shuffle_data(current_data, np.squeeze(current_label))
+    current_data = rotation_multiprocessing_wrapper(rotate_point_by_label, current_data, current_label)
+    current_data, current_label = pc_utils.shuffle_pointcloud(current_data, np.squeeze(current_label))
     current_label = np.squeeze(current_label)
     
     return current_data, current_label
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--folder', '-f', help='Path to data folder')
+    parser.add_argument('--split', '-s', help='Path to data folder', default='train')
+    parser.add_argument('--outpath', '-o', help='Path to output data folder')
+    parser.add_argument('--max_point_num', '-m', help='Max point number of each sample', type=int, default=2048)
+    parser.add_argument('--batch_size', '-b', help='Batch_size', type=int, default=32)
+    parser.add_argument('--NUM_ANGLES', '-a', help='Rotation angle number', type=int, default=4)
+
+    args = parser.parse_args()
+    print(args)
+    
+    #read data
+    root = os.path.join(ROOT_DIR, 'data', args.folder) if args.folder else os.path.join(ROOT_DIR, 'data', 'arch3_no_others_combined_5m_4096')
+    max_point_num = args.max_point_num
+    split= args.split
+    train_filelist = os.path.join(root, split + '_data_files.txt')
+    train_dataset = arch_dataloader.get_dataloader(filelist=train_filelist, num_points=max_point_num, num_dims=3, split=split, batch_size=args.batch_size, num_workers=8, drop_last=True)
+    print("classifer set size: " + str(train_dataset.dataset.__len__()))
+
+    #output settings
+    output_dir = os.path.join(ROOT_DIR, 'data', args.outpath) if args.outpath else os.path.join(ROOT_DIR, 'data', 'rotated_%d_angle_%d' % (args.NUM_ANGLES, max_point_num))
+    h5_file_size = 2112
+    NUM_ANGLES = args.NUM_ANGLES
+    batch_size = args.batch_size * args.NUM_ANGLES
+    batch_num = h5_file_size / batch_size
+    rotated_dataset = np.zeros((h5_file_size, max_point_num, 3))
+    rotated_labelset = np.zeros((h5_file_size), dtype=np.int32)
+    idx = 0
+    idx_h5 = 0
+    
+    #rotate data 
+    for iter, data in enumerate(train_dataset):
+        input_points, _ = data
+        rotated_data, rotated_label = rotate_pc(current_data=input_points, NUM_CLASSES=args.NUM_ANGLES)
+        start = idx*batch_size
+        end = (idx+1)*batch_size
+        rotated_dataset[start:end, ...] = rotated_data
+        rotated_labelset[start:end, ...] = rotated_label
+        idx += 1
+        if (idx == batch_num):
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            filename_h5 = os.path.join(output_dir, '%d.h5' % idx_h5)
+            print('{}-Saving {}...'.format(datetime.now(), filename_h5))
+            file = h5py.File(filename_h5, 'w')
+            file.create_dataset('data', data=rotated_dataset[0:end, ...])
+            file.create_dataset('label', data=rotated_labelset[0:end, ...])
+            file.close()
+            idx_h5 +=1
+            idx = 0
+
+        
+if __name__ == '__main__':
+    main()
+    print('{}-Done.'.format(datetime.now()))

@@ -21,12 +21,13 @@ import sys
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def get_dataloader(filelist, num_points=2048, num_dims=3, split='train', group_shuffle=False, shuffle=False, random_translate=False, random_rotate=False, random_jitter=False, batch_size=32, num_workers=4, drop_last=False):
+def get_dataloader(filelist, num_points=2048, num_dims=3, split='train', is_rotated=False, group_shuffle=False, shuffle=False, random_translate=False, random_rotate=False, random_jitter=False, batch_size=32, num_workers=4, drop_last=False):
     dataset = ArchDataset(
             filelist=filelist,
             num_points=num_points,
             num_dims=num_dims,
             split = split,
+            is_rotated = is_rotated,
             group_shuffle=group_shuffle,
             random_translate=random_translate, 
             random_rotate=random_rotate,

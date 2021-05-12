@@ -74,7 +74,7 @@ def norm_rgb(points_colors):
 
 def shuffle_pointcloud(pointcloud, label):
     N = pointcloud.shape[0]
-    order = np.arrange(N)
+    order = np.arange(N)
     np.random.shuffle(order)
     pointcloud = pointcloud[order, :]
     lable = label[order]
@@ -158,28 +158,26 @@ def load_sampled_h5_seg(filelist, dims=3, split='train'):
         else:
             points.append(data['data'][:,:,3:dims+3].astype(np.float32))
                 
-        labels_seg.append(data['label_seg'][...].astype(np.int64))
+        labels_seg.append(data['label_seg'][...].astype(np.int32))
         data.close()
 
     return (np.concatenate(points, axis=0),
             np.concatenate(labels_seg, axis=0))
 
 
-def load_cls(filelist):
+def load_rotated_h5(filelist):
     points = []
-    labels = []
-
+    labels_angle = []
     folder = os.path.dirname(filelist)
     for line in open(filelist):
-        filename = os.path.basename(line.rstrip())
-        data = h5py.File(os.path.join(folder, filename))
-        if 'normal' in data:
-            points.append(np.concatenate([data['data'][...], data['normal'][...]], axis=-1).astype(np.float32))
-        else:
-            points.append(data['data'][...].astype(np.float32))
-        labels.append(np.squeeze(data['label'][:]).astype(np.int64))
+        print("Load file: " + str(line))
+        data = h5py.File(os.path.join(folder, line.strip()), 'r')
+        points.append(data['data'][...].astype(np.float32))
+        labels_angle.append(data['label'][...].astype(np.int32))
+        data.close()
+
     return (np.concatenate(points, axis=0),
-            np.concatenate(labels, axis=0))
+            np.concatenate(labels_angle, axis=0))
 
 
 def is_h5_list(filelist):
@@ -307,10 +305,6 @@ def draw_point_cloud(input_points, canvasSize=500, space=200, diameter=25,
     
     image = image / np.max(image)
     return image
-
-
-
-
     
 def point_cloud_three_views(points):
     """ input points Nx3 numpy array (+y is up direction).
@@ -324,3 +318,12 @@ def point_cloud_three_views(points):
     img3 = draw_point_cloud(points, zrot=180.0/180.0*np.pi, xrot=90/180.0*np.pi, yrot=0/180.0*np.pi)
     image_large = np.concatenate([img1, img2, img3], 1)
     return image_large
+
+
+#from PIL import Image
+def point_cloud_three_views_demo():
+    """ Demo for draw_point_cloud function """
+    points = read_ply('../third_party/mesh_sampling/piano.ply')
+    im_array = point_cloud_three_views(points)
+    #img = Image.fromarray(np.uint8(im_array*255.0))
+    img.save('piano.jpg')
