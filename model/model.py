@@ -347,82 +347,64 @@ class DGCNN_Seg_Encoder(nn.Module):
         x4 = torch.cat((x1, x2, x3), dim=1)      # (batch_size, 64*3, num_points)
 
         x = self.conv6(x4)                       # (batch_size, 64*3, num_points) -> (batch_size, emb_dims, num_points)
-        x = x.max(dim=-1, keepdim=False)[0]     # (batch_size, emb_dims, num_points) -> (batch_size, emb_dims)
-
+        #x = x.max(dim=-1, keepdim=False)[0]     # (batch_size, emb_dims, num_points) -> (batch_size, emb_dims)
+        x1 = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
+        x2 = F.adaptive_avg_pool1d(x, 1).view(batch_size, -1)
+        x = torch.cat((x1, x2), 1)
         feat = x.unsqueeze(1)                   # (batch_size, num_points) -> (batch_size, 1, emb_dims)
 
         return feat, x4                             # (batch_size, 1, emb_dims)
 
-    
-class DGCNN_Cls_Encoder(nn.Module):
+
+# ----------------------------------------
+# DGCNN_CLASSIFICATION_DECODER
+# ----------------------------------------
+class DGCNN_Cls_Classifier(nn.Module):
     def __init__(self, args):
-        super(DGCNN_Seg_Encoder, self).__init__()
-        if args.k == None:
-            self.k = 20
-        else:
-            self.k = args.k
-        #self.transform_net = Point_Transform_Net()
-
-        self.bn1 = nn.BatchNorm2d(64)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.bn4 = nn.BatchNorm2d(256)
-        self.bn6 = nn.BatchNorm1d(args.feat_dims)
-
-        self.conv1 = nn.Sequential(nn.Conv2d(args.num_dims*2, 64, kernel_size=1, bias=False),
-                                   self.bn1,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv2 = nn.Sequential(nn.Conv2d(64*2, 64, kernel_size=1, bias=False),
-                                   self.bn2,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv3 = nn.Sequential(nn.Conv2d(64*2, 128, kernel_size=1, bias=False),
-                                   self.bn3,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv4 = nn.Sequential(nn.Conv2d(128*2, 256, kernel_size=1, bias=False),
-                                   self.bn4,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv5 = nn.Sequential(nn.Conv1d(512, args.feat_dims, kernel_size=1, bias=False),
-                                   self.bn6,
-                                   nn.LeakyReLU(negative_slope=0.2))
+        super(DGCNN_Cls_Classifier, self).__init__()
+        self.output_channels = args.num_angles
+        self.linear1 = nn.Linear(args.feat_dims*2, 512, bias=False)
+        self.bn6 = nn.BatchNorm1d(512)
+        self.dp1 = nn.Dropout(p=args.dropout)
+        self.linear2 = nn.Linear(512, 256)
+        self.bn7 = nn.BatchNorm1d(256)
+        self.dp2 = nn.Dropout(p=args.dropout)
+        self.linear3 = nn.Linear(256, self.output_channels)
 
     def forward(self, x):
-        x = x.transpose(2, 1)
-
         batch_size = x.size(0)
-        num_points = x.size(2)
-        num_dims = x.size(1)
+        x = F.leaky_relu(self.bn6(self.linear1(x)), negative_slope=0.2)
+        x = self.dp1(x)
+        x = F.leaky_relu(self.bn7(self.linear2(x)), negative_slope=0.2)
+        x = self.dp2(x)
+        x = self.linear3(x)
+        x = x.transpose(2,1).contiguous()
+        x = F.log_softmax(x.view(-1,self.num_class), dim=-1)
+        x = x.view(batchsize, self.output_channels)
+        return x
 
-        #x = get_graph_feature(x, k=self.k)     # (batch_size, 9, num_points) -> (batch_size, 9*2, num_points, k)
-        #x = x.transpose(2, 1)                   # (batch_size, 9*2, num_points, k) -> (batch_size, num_points, 9,k)
-        #x = torch.bmm(x, t)                     # (batch_size, num_points, 3) * (batch_size, 3, 3) -> (batch_size, num_points, 3)
-        #x = x.transpose(2, 1)                   # (batch_size, num_points, 3) -> (batch_size, 3, num_points)
 
-        x = get_graph_feature(x, k=self.k)      # (batch_size, num_dims, num_points) -> (batch_size, num_dims*2, num_points, k)
-        x = self.conv1(x)                       # (batch_size, num_dims*2, num_points, k) -> (batch_size, 64, num_points, k)
-        x1 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
+# ----------------------------------------
+# Classification Network
+# ----------------------------------------
 
-        x = get_graph_feature(x1, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
-        x = self.conv2(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
-        x2 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
+class ClassificationNet(nn.Module):
+    def __init__(self, args):
+        super(ClassificationNet, self).__init__()
+        self.is_eval = args.eval
+        self.encoder == PointNetEncoder(args)
+        if not self.is_eval:
+            self.classifier = DGCNN_Cls_Classifier(args)
+        self.loss = CrossEntropyLoss()
 
-        x = get_graph_feature(x2, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
-        x = self.conv3(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
-        x3 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
-        
-        x = get_graph_feature(x3, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
-        x = self.conv4(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
-        x4 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
-        
-        x = torch.cat((x1, x2, x3, x4), dim=1)      # (batch_size, 64*3, num_points)
-        x0 = self.conv5(x)
-        x1 = F.adaptive_max_pool1d(x0, 1).view(batch_size, -1)
-        x2 = F.adaptive_avg_pool1d(x0, 1).view(batch_size, -1)
-        x = torch.cat((x1, x2), 1)
+    def forward(self, input):
+        feats, _ = self.encoder(input)
+        output = self.classifier(feats)
+        return output, feats
 
-        feat = x.unsqueeze(1)                   # (batch_size, num_points) -> (batch_size, 1, emb_dims)
-
-        return feat, x0                             # (batch_size, 1, emb_dims)
-
+    def get_loss(self, pred, label):
+        # loss = tf.losses.softmax_cross_entropy(onehot_labels=labels, logits=pred, label_smoothing=0.2)
+        return self.loss(input, output)
 
 
 # ----------------------------------------
