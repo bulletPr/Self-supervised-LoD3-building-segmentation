@@ -197,7 +197,12 @@ def main(opt):
         sem_seg_net = sem_seg_net.cuda()       
     # initialize optimizer
     optimizer = optim.Adam(sem_seg_net.parameters(), lr=0.01) 
-
+    
+    if args.scheduler == 'cos':
+        scheduler = CosineAnnealingLR(optimizer, opt.epochs, eta_min=1e-3)
+    elif args.scheduler == 'step':
+        scheduler = StepLR(optimizer, 20, 0.5, opt.epochs)
+        
 # start training
     n_batch = 0
     # start epoch index
@@ -254,6 +259,17 @@ def main(opt):
             n_batch= train_dataset.dataset.__len__() // opt.batch_size
             loss_buf.append(train_loss.detach().cpu().numpy())
             log_string('[%d: %d/%d] | train loss: %f | train accuracy: %f | train iou: %f' %(epoch+1, iter+1, n_batch, np.mean(loss_buf), correct.item()/float(opt.batch_size * opt.num_points),correct.item() / float(2*opt.batch_size*opt.num_points-correct.item())))
+        
+        #update lr
+        if opt.scheduler == 'cos':
+            scheduler.step()
+        elif opt.scheduler == 'step':
+            if optimizer.param_groups[0]['lr'] > 1e-5:
+                scheduler.step()
+            if optimizer.param_groups[0]['lr'] < 1e-5:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = 1e-5
+        
         # save tensorboard
         total_time.append(time.time()-start_time)
         print("Avg one epoch time: %.2f, total %d epochs time: %.2f" % (np.mean(total_time), epoch+1, total_time[0]))

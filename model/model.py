@@ -43,13 +43,6 @@ def knn(x, k):
 
     idx = pairwise_distance.topk(k=k, dim=-1)[1] #(batch_size, num_points, k)
 
-    if idx.get_device() == -1:
-        idx_base = torch.arange(0, batch_size).view(-1,1,1)*num_points
-    else:
-        idx_base = torch.arange(0,batch_size,device=idx.get_device()).view(-1,1,1)*num_points
-    idx = idx + idx_base
-    idx = idx.view(-1)
-
     return idx
 
 
@@ -103,12 +96,21 @@ def local_maxpool(x, idx):
 
 def get_graph_feature(x, k=20, idx=None):
     batch_size = x.size(0)
+    num_dims = x.size(1)
     num_points = x.size(2)
     x = x.view(batch_size, -1, num_points)      # (batch_size, num_dims, num_points)
     if idx is None:
-        idx = knn(x, k=k)                       # (batch_size, num_points, k)
-
-    _, num_dims, _ = x.size()
+        if num_dims == 3 or num_dims == 6:
+            idx = knn(x, k=k)                       # (batch_size, num_points, k)
+        else:
+            idx = knn(x[:,6:9], k=k)
+    
+    if idx.get_device() == -1:
+        idx_base = torch.arange(0, batch_size).view(-1,1,1)*num_points
+    else:
+        idx_base = torch.arange(0,batch_size,device=idx.get_device()).view(-1,1,1)*num_points
+    idx = idx + idx_base
+    idx = idx.view(-1)
 
     x = x.transpose(2, 1).contiguous()          # (batch_size, num_points, num_dims)
     feature = x.view(batch_size*num_points, -1)[idx, :]                 # (batch_size*n, num_dims) -> (batch_size*n*k, num_dims)
@@ -123,7 +125,7 @@ def get_graph_feature(x, k=20, idx=None):
 # ----------------------------------------
 # FoldingNet_Encoder
 # ----------------------------------------
-
+ 
 class FoldNet_Encoder(nn.Module):
     def __init__(self, args):
         super(FoldNet_Encoder, self).__init__()
@@ -226,72 +228,6 @@ class FoldNet_Decoder(nn.Module):
         return after_fold2.transpose(1,2)  #(bs, num_points, 3)
 
 
-# ----------------------------------------
-# DGCNN_CLASSIFICATION_Encoder
-# ----------------------------------------
-
-class DGCNN_Cls_Encoder(nn.Module):
-    def __init__(self, args):
-        super(DGCNN_Cls_Encoder, self).__init__()
-        if args.k == None:
-            self.k = 20
-        else:
-            self.k = args.k
-        self.task = args.task
-
-        self.bn1 = nn.BatchNorm2d(64)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.bn4 = nn.BatchNorm2d(256)
-        self.bn5 = nn.BatchNorm1d(args.feat_dims)
-
-        self.conv1 = nn.Sequential(nn.Conv2d(3*2, 64, kernel_size=1, bias=False),
-                                   self.bn1,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv2 = nn.Sequential(nn.Conv2d(64*2, 64, kernel_size=1, bias=False),
-                                   self.bn2,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv3 = nn.Sequential(nn.Conv2d(64*2, 128, kernel_size=1, bias=False),
-                                   self.bn3,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv4 = nn.Sequential(nn.Conv2d(128*2, 256, kernel_size=1, bias=False),
-                                   self.bn4,
-                                   nn.LeakyReLU(negative_slope=0.2))
-        self.conv5 = nn.Sequential(nn.Conv1d(512, args.feat_dims, kernel_size=1, bias=False),
-                                   self.bn5,
-                                   nn.LeakyReLU(negative_slope=0.2))
-
-    def forward(self, x):
-        x = x.transpose(2, 1)
-
-        batch_size = x.size(0)
-        x = get_graph_feature(x, k=self.k)      # (batch_size, 3, num_points) -> (batch_size, 3*2, num_points, k)
-        x = self.conv1(x)                       # (batch_size, 3*2, num_points, k) -> (batch_size, 64, num_points, k)
-        x1 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
-
-        x = get_graph_feature(x1, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
-        x = self.conv2(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
-        x2 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
-
-        x = get_graph_feature(x2, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
-        x = self.conv3(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 128, num_points, k)
-        x3 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 128, num_points, k) -> (batch_size, 128, num_points)
-
-        x = get_graph_feature(x3, k=self.k)     # (batch_size, 128, num_points) -> (batch_size, 128*2, num_points, k)
-        x = self.conv4(x)                       # (batch_size, 128*2, num_points, k) -> (batch_size, 256, num_points, k)
-        x4 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 256, num_points, k) -> (batch_size, 256, num_points)
-
-        x = torch.cat((x1, x2, x3, x4), dim=1)  # (batch_size, 512, num_points)
-
-        x0 = self.conv5(x)                      # (batch_size, 512, num_points) -> (batch_size, feat_dims, num_points)
-        x = x0.max(dim=-1, keepdim=False)[0]    # (batch_size, feat_dims, num_points) -> (batch_size, feat_dims)
-        feat = x.unsqueeze(1)                   # (batch_size, feat_dims) -> (batch_size, 1, feat_dims)
-
-        if self.task == 'classify':
-            return feat, x0
-        elif self.task == 'reconstruct':
-            return feat                         # (batch_size, 1, feat_dims)
-
 
 # ----------------------------------------
 # Point_transform_mini_network
@@ -354,7 +290,7 @@ class DGCNN_Seg_Encoder(nn.Module):
             self.k = 20
         else:
             self.k = args.k
-        self.transform_net = Point_Transform_Net()
+        #self.transform_net = Point_Transform_Net()
 
         self.bn1 = nn.BatchNorm2d(64)
         self.bn2 = nn.BatchNorm2d(64)
@@ -363,7 +299,7 @@ class DGCNN_Seg_Encoder(nn.Module):
         self.bn5 = nn.BatchNorm2d(64)
         self.bn6 = nn.BatchNorm1d(args.feat_dims)
 
-        self.conv1 = nn.Sequential(nn.Conv2d(6, 64, kernel_size=1, bias=False),
+        self.conv1 = nn.Sequential(nn.Conv2d(args.num_dims*2, 64, kernel_size=1, bias=False),
                                    self.bn1,
                                    nn.LeakyReLU(negative_slope=0.2))
         self.conv2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=1, bias=False),
@@ -387,15 +323,15 @@ class DGCNN_Seg_Encoder(nn.Module):
 
         batch_size = x.size(0)
         num_points = x.size(2)
+        num_dims = x.size(1)
 
-        x0 = get_graph_feature(x, k=self.k)     # (batch_size, 3, num_points) -> (batch_size, 3*2, num_points, k)
-        t = self.transform_net(x0)              # (batch_size, 3, 3)
-        x = x.transpose(2, 1)                   # (batch_size, 3, num_points) -> (batch_size, num_points, 3)
-        x = torch.bmm(x, t)                     # (batch_size, num_points, 3) * (batch_size, 3, 3) -> (batch_size, num_points, 3)
-        x = x.transpose(2, 1)                   # (batch_size, num_points, 3) -> (batch_size, 3, num_points)
+        #x = get_graph_feature(x, k=self.k)     # (batch_size, 9, num_points) -> (batch_size, 9*2, num_points, k)
+        #x = x.transpose(2, 1)                   # (batch_size, 9*2, num_points, k) -> (batch_size, num_points, 9,k)
+        #x = torch.bmm(x, t)                     # (batch_size, num_points, 3) * (batch_size, 3, 3) -> (batch_size, num_points, 3)
+        #x = x.transpose(2, 1)                   # (batch_size, num_points, 3) -> (batch_size, 3, num_points)
 
-        x = get_graph_feature(x, k=self.k)      # (batch_size, 3, num_points) -> (batch_size, 3*2, num_points, k)
-        x = self.conv1(x)                       # (batch_size, 3*2, num_points, k) -> (batch_size, 64, num_points, k)
+        x = get_graph_feature(x, k=self.k)      # (batch_size, num_dims, num_points) -> (batch_size, num_dims*2, num_points, k)
+        x = self.conv1(x)                       # (batch_size, num_dims*2, num_points, k) -> (batch_size, 64, num_points, k)
         x = self.conv2(x)                       # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points, k)
         x1 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
 
@@ -417,141 +353,89 @@ class DGCNN_Seg_Encoder(nn.Module):
 
         return feat, x4                             # (batch_size, 1, emb_dims)
 
-
-# ----------------------------------------
-# DGCNN_CLASSIFICATION_Classifier_Net
-# ----------------------------------------
-
-class DGCNN_Cls_Classifier(nn.Module):
+    
+class DGCNN_Cls_Encoder(nn.Module):
     def __init__(self, args):
-        super(DGCNN_Cls_Classifier, self).__init__()
-        if args.dataset == 'arch':
-            output_channels = 10
-        elif args.dataset == 'shapenetcorev2':
-            output_channels = 55
-        elif args.dataset == 'shapenetpart':
-            output_channels = 16
-        elif args.dataset == 'modelnet40':
-            output_channels = 40
+        super(DGCNN_Seg_Encoder, self).__init__()
+        if args.k == None:
+            self.k = 20
+        else:
+            self.k = args.k
+        #self.transform_net = Point_Transform_Net()
 
-        self.linear1 = nn.Linear(args.feat_dims*2, 512, bias=False)
-        self.bn6 = nn.BatchNorm1d(512)
-        self.dp1 = nn.Dropout(p=args.dropout)
-        self.linear2 = nn.Linear(512, 256)
-        self.bn7 = nn.BatchNorm1d(256)
-        self.dp2 = nn.Dropout(p=args.dropout)
-        self.linear3 = nn.Linear(256, output_channels)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.bn4 = nn.BatchNorm2d(256)
+        self.bn6 = nn.BatchNorm1d(args.feat_dims)
+
+        self.conv1 = nn.Sequential(nn.Conv2d(args.num_dims*2, 64, kernel_size=1, bias=False),
+                                   self.bn1,
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv2 = nn.Sequential(nn.Conv2d(64*2, 64, kernel_size=1, bias=False),
+                                   self.bn2,
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv3 = nn.Sequential(nn.Conv2d(64*2, 128, kernel_size=1, bias=False),
+                                   self.bn3,
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv4 = nn.Sequential(nn.Conv2d(128*2, 256, kernel_size=1, bias=False),
+                                   self.bn4,
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv5 = nn.Sequential(nn.Conv1d(512, args.feat_dims, kernel_size=1, bias=False),
+                                   self.bn6,
+                                   nn.LeakyReLU(negative_slope=0.2))
 
     def forward(self, x):
-        batch_size = x.size(0)
+        x = x.transpose(2, 1)
 
-        x1 = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
-        x2 = F.adaptive_avg_pool1d(x, 1).view(batch_size, -1)
+        batch_size = x.size(0)
+        num_points = x.size(2)
+        num_dims = x.size(1)
+
+        #x = get_graph_feature(x, k=self.k)     # (batch_size, 9, num_points) -> (batch_size, 9*2, num_points, k)
+        #x = x.transpose(2, 1)                   # (batch_size, 9*2, num_points, k) -> (batch_size, num_points, 9,k)
+        #x = torch.bmm(x, t)                     # (batch_size, num_points, 3) * (batch_size, 3, 3) -> (batch_size, num_points, 3)
+        #x = x.transpose(2, 1)                   # (batch_size, num_points, 3) -> (batch_size, 3, num_points)
+
+        x = get_graph_feature(x, k=self.k)      # (batch_size, num_dims, num_points) -> (batch_size, num_dims*2, num_points, k)
+        x = self.conv1(x)                       # (batch_size, num_dims*2, num_points, k) -> (batch_size, 64, num_points, k)
+        x1 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
+
+        x = get_graph_feature(x1, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
+        x = self.conv2(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
+        x2 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
+
+        x = get_graph_feature(x2, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
+        x = self.conv3(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
+        x3 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
+        
+        x = get_graph_feature(x3, k=self.k)     # (batch_size, 64, num_points) -> (batch_size, 64*2, num_points, k)
+        x = self.conv4(x)                       # (batch_size, 64*2, num_points, k) -> (batch_size, 64, num_points, k)
+        x4 = x.max(dim=-1, keepdim=False)[0]    # (batch_size, 64, num_points, k) -> (batch_size, 64, num_points)
+        
+        x = torch.cat((x1, x2, x3, x4), dim=1)      # (batch_size, 64*3, num_points)
+        x0 = self.conv5(x)
+        x1 = F.adaptive_max_pool1d(x0, 1).view(batch_size, -1)
+        x2 = F.adaptive_avg_pool1d(x0, 1).view(batch_size, -1)
         x = torch.cat((x1, x2), 1)
 
-        x = F.leaky_relu(self.bn6(self.linear1(x)), negative_slope=0.2)
-        x = self.dp1(x)
-        x = F.leaky_relu(self.bn7(self.linear2(x)), negative_slope=0.2)
-        x = self.dp2(x)
-        x = self.linear3(x)
-        return x
+        feat = x.unsqueeze(1)                   # (batch_size, num_points) -> (batch_size, 1, emb_dims)
 
+        return feat, x0                             # (batch_size, 1, emb_dims)
 
-# -----------------------------------------------
-# PointNet Encoder
-# -----------------------------------------------
-
-class PointNetfeat(nn.Module):
-    def __init__(self, global_feat=True):
-        super(PointNetfeat, self).__init__()
-        self.stn = Point_Transform_Net()
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
-        self.conv2 = torch.nn.Conv1d(64, 128, 1)
-        self.conv3 = torch.nn.Conv1d(128, 1024, 1)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.bn2 = nn.BatchNorm1d(128)
-        self.bn3 = nn.BatchNorm1d(1024)
-        self.global_feat = global_feat
-
-    def forward(self, x):
-        batchsize = x.size()[0]
-        n_pts = x.size()[2]
-        trans = self.stn(x)
-        x = x.transpose(2, 1)
-        x = torch.bmm(x, trans)
-        x = x.transpose(2, 1)
-        x = F.relu(self.bn1(self.conv1(x)))
-        pointfeat = x
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = self.bn3(self.conv3(x))  # x = batch,1024,n(n=2048)
-        x = torch.max(x, 2, keepdim=True)[0]  # x = batch,1024,1
-        x = x.view(-1, 1024)  # x = batch,1024
-        if self.global_feat:
-            return x, trans
-        else:
-            x = x.view(-1, 1024, 1).repeat(1, 1, n_pts)
-            return torch.cat([x, pointfeat], 1), trans
-
-
-class PointNetEncoder(nn.Module):
-    def __init__(self):
-        super(PointNetEncoder, self).__init__()
-        self.feat = PointNetfeat(global_feat=True)
-        self.fc1 = nn.Linear(1024, 1024)
-        self.bn1 = nn.BatchNorm1d(1024)
-        self.fc2 = nn.Linear(1024, 1024)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x, trans = self.feat(x)  # x = batch,1024
-        x = F.relu(self.bn1(self.fc1(x)))  # x = batch,1024
-        x = self.fc2(x)  # x = batch,1024
-
-        return x, trans
-
-
-class PointNetCls(nn.Module):
-    def __init__(self, output_channels=2):
-        super(PointNetCls, self).__init__()
-        if args.dataset == 'arch':
-            output_channels = 10
-        elif args.dataset == 'shapenetcorev2':
-            output_channels = 55
-        elif args.dataset == 'shapenetpart':
-            output_channels = 16
-        elif args.dataset == 'modelnet40':
-            output_channels = 40
-
-        self.fc1 = nn.Linear(1024, 512)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, k)
-        self.bn1 = nn.BatchNorm1d(512)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        batch_size = x.size(0)
-        x = F.relu(self.bn1(self.fc1(x)))
-        x = F.relu(self.bn2(self.fc2(x)))
-        x = self.fc3(x)
-        return x
 
 
 # ----------------------------------------
 # Reconstrucion Network
 # ----------------------------------------
 
-class DGCNN_FoldNet(nn.Module):
+class ReconstructionNet(nn.Module):
     def __init__(self, args):
-        super(DGCNN_FoldNet, self).__init__()
+        super(ReconstructionNet, self).__init__()
         if args.encoder == 'foldingnet':
             self.encoder = FoldNet_Encoder(args)
-        elif args.encoder == 'dgcnn_classification':
-            self.encoder = DGCNN_Cls_Encoder(args)
         elif args.encoder == 'dgcnn_segmentation':
             self.encoder = DGCNN_Seg_Encoder(args)
-        elif args.encoder == 'pointnet':
-            self.encoder = PointNetEncoder(args)
         self.decoder = FoldNet_Decoder(args)
         if args.loss == 'ChamferLoss':
             self.loss = ChamferLoss()
@@ -569,78 +453,4 @@ class DGCNN_FoldNet(nn.Module):
     def get_loss(self, input, output):
         #input (bs, 2048, 3)
         #output (bs, 2025,3)
-        return self.loss(input, output)
-
-
-# ----------------------------------------
-# Classification Network
-# ----------------------------------------
-
-class ClassificationNet(nn.Module):
-    def __init__(self, args):
-        super(ClassificationNet, self).__init__()
-        self.is_eval = args.eval
-        if args.encoder == 'foldnet':
-            self.encoder = FoldNet_Encoder(args)
-        elif args.encoder == 'dgcnn_cls':
-            self.encoder = DGCNN_Cls_Encoder(args)
-        elif args.encoder == 'dgcnn_seg':
-            self.encoder = DGCNN_Seg_Encoder(args)
-        elif args.encoder == 'pointnet_cls':
-            self.encoder == PointNetEncoder(args)
-        if not self.is_eval:
-            self.classifier = DGCNN_Cls_Classifier(args)
-        self.loss = CrossEntropyLoss()
-
-    def forward(self, input):
-        feature, latent = self.encoder(input)
-        if not self.is_eval:
-            output = self.classifier(latent)
-            return output, feature
-        else:
-            return feature
-
-# ----------------------------------------
-# Classification Network
-# ----------------------------------------
-
-class PointNetSegmentation(nn.Module):
-    def __init__(self, k=2):
-        super(PointNetDenseCls, self).__init__()
-        if args.dataset == 'arch':
-            self.k = 10
-        elif args.dataset == 'shapenetcorev2':
-            self.k = 55
-        elif args.dataset == 'shapenetpart':
-            self.k = 16
-        elif args.dataset == 'modelnet40':
-            self.k = 40
-        self.feat = PointNetfeat(global_feat=False)
-        self.conv1 = torch.nn.Conv1d(1088, 512, 1)
-        self.conv2 = torch.nn.Conv1d(512, 256, 1)
-        self.conv3 = torch.nn.Conv1d(256, 128, 1)
-        self.conv4 = torch.nn.Conv1d(128, self.k, 1)
-        self.bn1 = nn.BatchNorm1d(512)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.bn3 = nn.BatchNorm1d(128)
-
-    def forward(self, x):
-        batchsize = x.size()[0]
-        n_pts = x.size()[2]
-        x, trans = self.feat(x)
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = self.conv4(x)
-        x = x.transpose(2, 1).contiguous()
-        x = F.log_softmax(x.view(-1, self.k), dim=-1)
-        x = x.view(batchsize, n_pts, self.k)
-        return x, trans
-
-    def get_parameter(self):
-        return list(self.encoder.parameters()) + list(self.classifier.parameters())
-
-    def get_loss(self, input, output):
-        # input shape  (batch_size, 2048)
-        # output shape (batch_size, 2025)
         return self.loss(input, output)
