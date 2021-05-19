@@ -123,113 +123,6 @@ def get_graph_feature(x, k=20, idx=None):
 
 
 # ----------------------------------------
-# FoldingNet_Encoder
-# ----------------------------------------
- 
-class FoldNet_Encoder(nn.Module):
-    def __init__(self, args):
-        super(FoldNet_Encoder, self).__init__()
-        if args.k == None:
-            self.k = 16
-        else:
-            self.k = args.k
-        self.n = 2048 # input point cloud size
-        self.mlp1 = nn.Sequential(
-                nn.Conv1d(12,64,1),
-                nn.ReLU(),
-                nn.Conv1d(64,64,1),
-                nn.ReLU(),
-                nn.Conv1d(64,64,1),
-                nn.ReLU(),
-        )
-
-        self.linear1 = nn.Linear(64,64)
-        self.conv1 = nn.Conv1d(64,128,1)
-        self.linear2 = nn.Linear(128,128)
-        self.conv2 = nn.Conv1d(128,1024,1)
-        self.mlp2 = nn.Sequential(
-               nn.Conv1d(1024, args.feat_dims, 1),
-               nn.ReLU(),
-               nn.Conv1d(args.feat_dims, args.feat_dims, 1),
-        )
-
-    def graph_layer(self, x, idx):
-        x = local_maxpool(x, idx)
-        x = self.linear1(x)
-        x = x.transpose(2,1)
-        x = F.relu(self.conv1(x))
-        x = local_maxpool(x, idx)
-        x = self.linear2(x)
-        x = x.transpose(2,1)
-        x = self.conv2(x)
-        return x
-
-    def forward(self, pts):
-        pts = pts.transpose(2,1) #(batch_size, 3, num_points)
-        idx = knn(pts, k=self.k)
-        x = local_cov(pts, idx) #(batch_size, 3, num_points) -> (batch_size, 12, num_points)
-        x0 = self.mlp1(x) #(batch_size, 64, num_points)
-        x = self.graph_layer(x0, idx) #(batch_size,1024, num_points)
-        x = torch.max(x, 2, keepdim=True)[0] #(batch_size,1024,1)
-        x = self.mlp2(x)                     #(batch_size, feat_dims,1)
-        feat = x.transpose(2,1)              #(batch_size,1,feat_dims)
-
-        return feat, x0                      #(batch_size,1,feat_dims)  (batch_size, 64, num_points)
-
-
-# ----------------------------------------
-# FoldingNet_Decoder
-# ----------------------------------------
-
-class FoldNet_Decoder(nn.Module):
-    def __init__(self, args):
-        super(FoldNet_Decoder, self).__init__()
-        if args.num_points == 2048:
-            self.m = 2025
-            self.meshgrid=[[-0.3,0.3,45], [-0.3,0.3,45]]
-        elif args.num_points == 4096:
-            self.m = 4096
-            self.meshgrid=[[-0.3,0.3,64], [-0.3,0.3,64]]
-        self.folding1 = nn.Sequential(
-                nn.Conv1d(args.feat_dims+2, args.feat_dims, 1),
-                nn.ReLU(),
-                nn.Conv1d(args.feat_dims, args.feat_dims, 1),
-                nn.ReLU(),
-                nn.Conv1d(args.feat_dims, 3, 1),
-        )
-
-        self.folding2 = nn.Sequential(
-                nn.Conv1d(args.feat_dims+3, args.feat_dims, 1),
-                nn.ReLU(),
-                nn.Conv1d(args.feat_dims, args.feat_dims,1),
-                nn.ReLU(),
-                nn.Conv1d(args.feat_dims,3,1),
-        )
-
-
-    def build_grid(self, batch_size):
-        x = np.linspace(*self.meshgrid[0])
-        y = np.linspace(*self.meshgrid[1])
-        grid = np.array(list(itertools.product(x, y)))
-        grid = np.repeat(grid[np.newaxis, ...], repeats=batch_size, axis=0)
-        grid = torch.tensor(grid)
-        return grid.float()
-
-
-    def forward(self, x):
-        x = x.transpose(1,2).repeat(1,1,self.m) #(batch_size,feat_dims,num_points)
-        grid = self.build_grid(x.shape[0]).transpose(1,2) #(bs, 2, feat_dims)
-        if x.get_device() != -1:
-            grid = grid.cuda(x.get_device())
-        concate1 = torch.cat((x, grid),dim=1) #(bs, feat_dims+2, num_points)
-        after_fold1 = self.folding1(concate1) #(bs,3,num_points)
-        concate2 = torch.cat((x, after_fold1), dim=1) #(bs, feat_dims+3, num_points)
-        after_fold2 = self.folding2(concate2) #(bs, 3, num_points)
-        return after_fold2.transpose(1,2)  #(bs, num_points, 3)
-
-
-
-# ----------------------------------------
 # Point_transform_mini_network
 # ----------------------------------------
 
@@ -291,7 +184,7 @@ class DGCNN_Seg_Encoder(nn.Module):
         else:
             self.k = args.k
         #self.transform_net = Point_Transform_Net()
-
+        self.symmetric_function = args.symmetric_function
         self.bn1 = nn.BatchNorm2d(64)
         self.bn2 = nn.BatchNorm2d(64)
         self.bn3 = nn.BatchNorm2d(64)
@@ -347,29 +240,83 @@ class DGCNN_Seg_Encoder(nn.Module):
         x4 = torch.cat((x1, x2, x3), dim=1)      # (batch_size, 64*3, num_points)
 
         x = self.conv6(x4)                       # (batch_size, 64*3, num_points) -> (batch_size, emb_dims, num_points)
-        #x = x.max(dim=-1, keepdim=False)[0]     # (batch_size, emb_dims, num_points) -> (batch_size, emb_dims)
-        x1 = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
-        x2 = F.adaptive_avg_pool1d(x, 1).view(batch_size, -1)
-        x = torch.cat((x1, x2), 1)
-        feat = x.unsqueeze(1)                   # (batch_size, num_points) -> (batch_size, 1, emb_dims)
+        if self.symmetric_function == 2:
+            x1 = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
+            x2 = F.adaptive_avg_pool1d(x, 1).view(batch_size, -1)
+            x = torch.cat((x1, x2), 1)           #(batch_size, emb_dims*2)
+        else:
+            x = x.max(dim=-1, keepdim=False)[0]     # (batch_size, emb_dims, num_points) -> (batch_size, emb_dims)
+        #feat = x.unsqueeze(1)                   # (batch_size, emb_dims) -> (batch_size, 1, emb_dims) or (batch_size, 1, emb_dims*2)
 
-        return feat, x4                             # (batch_size, 1, emb_dims)
+        return x, x4                             # (batch_size, emb_dims*2)
+
 
 
 # ----------------------------------------
-# DGCNN_CLASSIFICATION_DECODER
+# FoldingNet_Decoder
 # ----------------------------------------
-class DGCNN_Cls_Classifier(nn.Module):
+
+class FoldNet_Decoder(nn.Module):
     def __init__(self, args):
-        super(DGCNN_Cls_Classifier, self).__init__()
+        super(FoldNet_Decoder, self).__init__()
+        if args.num_points == 2048:
+            self.m = 2025
+            self.meshgrid=[[-0.3,0.3,45], [-0.3,0.3,45]]
+        elif args.num_points == 4096:
+            self.m = 4096
+            self.meshgrid=[[-0.3,0.3,64], [-0.3,0.3,64]]
+        self.folding1 = nn.Sequential(
+                nn.Conv1d(args.feat_dims*args.symmetric_function+2, args.feat_dims, 1),
+                nn.ReLU(),
+                nn.Conv1d(args.feat_dims, args.feat_dims, 1),
+                nn.ReLU(),
+                nn.Conv1d(args.feat_dims, 3, 1),
+        )
+
+        self.folding2 = nn.Sequential(
+                nn.Conv1d(args.feat_dims*args.symmetric_function+3, args.feat_dims, 1),
+                nn.ReLU(),
+                nn.Conv1d(args.feat_dims, args.feat_dims,1),
+                nn.ReLU(),
+                nn.Conv1d(args.feat_dims,3,1),
+        )
+
+
+    def build_grid(self, batch_size):
+        x = np.linspace(*self.meshgrid[0])
+        y = np.linspace(*self.meshgrid[1])
+        grid = np.array(list(itertools.product(x, y)))
+        grid = np.repeat(grid[np.newaxis, ...], repeats=batch_size, axis=0)
+        grid = torch.tensor(grid)
+        return grid.float()
+
+
+    def forward(self, x):
+        x = x.unsqueeze(1).transpose(1,2).repeat(1,1,self.m) #(batch_size,feat_dims,num_points)
+        grid = self.build_grid(x.shape[0]).transpose(1,2) #(bs, 2, feat_dims)
+        if x.get_device() != -1:
+            grid = grid.cuda(x.get_device())
+        concate1 = torch.cat((x, grid),dim=1) #(bs, feat_dims+2, num_points)
+        after_fold1 = self.folding1(concate1) #(bs,3,num_points)
+        concate2 = torch.cat((x, after_fold1), dim=1) #(bs, feat_dims+3, num_points)
+        after_fold2 = self.folding2(concate2) #(bs, 3, num_points)
+        return after_fold2.transpose(1,2)  #(bs, num_points, 3)
+
+
+# ----------------------------------------
+# DGCNN_ROTAION_CLASSIFICATION_DECODER
+# ----------------------------------------
+class DGCNN_RT_Cls_Classifier(nn.Module):
+    def __init__(self, args):
+        super(DGCNN_RT_Cls_Classifier, self).__init__()
         self.output_channels = args.num_angles
-        self.linear1 = nn.Linear(args.feat_dims*2, 512, bias=False)
+        self.linear1 = nn.Linear(args.feat_dims*2, 512, bias=False)  #(batch_size, 512)
         self.bn6 = nn.BatchNorm1d(512)
         self.dp1 = nn.Dropout(p=args.dropout)
-        self.linear2 = nn.Linear(512, 256)
+        self.linear2 = nn.Linear(512, 256) #(batch_size, 216)
         self.bn7 = nn.BatchNorm1d(256)
         self.dp2 = nn.Dropout(p=args.dropout)
-        self.linear3 = nn.Linear(256, self.output_channels)
+        self.linear3 = nn.Linear(256, self.output_channels) #(batch_size, args.num_angles)
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -378,9 +325,9 @@ class DGCNN_Cls_Classifier(nn.Module):
         x = F.leaky_relu(self.bn7(self.linear2(x)), negative_slope=0.2)
         x = self.dp2(x)
         x = self.linear3(x)
-        x = x.transpose(2,1).contiguous()
-        x = F.log_softmax(x.view(-1,self.num_class), dim=-1)
-        x = x.view(batchsize, self.output_channels)
+        x = x.contiguous()
+        x = F.log_softmax(x.view(-1,self.output_channels), dim=-1)
+        x = x.view(batch_size, self.output_channels)
         return x
 
 
@@ -391,10 +338,8 @@ class DGCNN_Cls_Classifier(nn.Module):
 class ClassificationNet(nn.Module):
     def __init__(self, args):
         super(ClassificationNet, self).__init__()
-        self.is_eval = args.eval
-        self.encoder == PointNetEncoder(args)
-        if not self.is_eval:
-            self.classifier = DGCNN_Cls_Classifier(args)
+        self.encoder = DGCNN_Seg_Encoder(args)
+        self.classifier = DGCNN_RT_Cls_Classifier(args)
         self.loss = CrossEntropyLoss()
 
     def forward(self, input):
@@ -414,10 +359,7 @@ class ClassificationNet(nn.Module):
 class ReconstructionNet(nn.Module):
     def __init__(self, args):
         super(ReconstructionNet, self).__init__()
-        if args.encoder == 'foldingnet':
-            self.encoder = FoldNet_Encoder(args)
-        elif args.encoder == 'dgcnn_segmentation':
-            self.encoder = DGCNN_Seg_Encoder(args)
+        self.encoder = DGCNN_Seg_Encoder(args)
         self.decoder = FoldNet_Decoder(args)
         if args.loss == 'ChamferLoss':
             self.loss = ChamferLoss()
@@ -436,3 +378,34 @@ class ReconstructionNet(nn.Module):
         #input (bs, 2048, 3)
         #output (bs, 2025,3)
         return self.loss(input, output)
+
+
+# ----------------------------------------
+# MultiTask Network
+# ----------------------------------------
+
+class MultiTaskNet(nn.Module):
+    def __init__(self, args):
+        super(MultiTaskNet, self).__init__()
+        self.encoder = DGCNN_Seg_Encoder(args)
+        self.decoder = FoldNet_Decoder(args)
+        if args.rec_loss == 'ChamferLoss':
+            self.rec_loss = ChamferLoss()
+        elif args.rec_loss == 'ChamferLoss_m':
+            self.rec_loss = ChamferLoss_m()
+        self.classifer = DGCNN_RT_Cls_Classifier(args)
+        self.rot_loss = CrossEntropyLoss()
+
+    def forward(self, input):
+        feature, mid_fea = self.encoder(input)
+        rec_output = self.decoder(feature)
+        rot_output = self.classifer(feature)
+        return rec_output, rot_output, feature, mid_fea
+
+    def get_parameter(self):
+        return list(self.encoder.parameters()) + list(self.decoder.parameters() + self.classifer.parameters())
+
+    def get_loss(self, input, rec_output, label, rot_output):
+        #input (bs, 2048, 3)
+        #output (bs, 2025,3)
+        return self.rec_loss(input, rec_output) + self.rot_loss(rot_output, label)

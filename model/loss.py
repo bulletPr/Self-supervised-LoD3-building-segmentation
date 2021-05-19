@@ -106,12 +106,13 @@ class ChamferLoss_m(nn.Module):
 # ----------------------------------------
 
 class CrossEntropyLoss(nn.Module):
-    def __init__(self, smoothing=True):
+    def __init__(self, smoothing=False):
         super(CrossEntropyLoss, self).__init__()
         self.smoothing = smoothing
 
     def forward(self, preds, gts):
-        gts = gts.contiguous().view(-1)
+        #gts = gts.contiguous().view(-1)
+        #gts= gts.view(-1,1)[:,0]
 
         if self.smoothing:
             eps = 0.2
@@ -123,6 +124,7 @@ class CrossEntropyLoss(nn.Module):
 
             loss = -(one_hot * log_prb).sum(dim=1).mean()
         else:
-            loss = F.cross_entropy(preds, gts, reduction='mean')
+            #loss = F.cross_entropy(preds, gts, reduction='mean')
+            loss = F.nll_loss(preds, gts)
 
         return loss
