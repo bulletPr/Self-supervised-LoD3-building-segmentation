@@ -100,11 +100,10 @@ def get_graph_feature(x, k=20, idx=None):
     num_points = x.size(2)
     x = x.view(batch_size, -1, num_points)      # (batch_size, num_dims, num_points)
     if idx is None:
-        if num_dims == 3 or num_dims == 6:
-            idx = knn(x, k=k)                       # (batch_size, num_points, k)
-        else:
+        if num_dims == 9:
             idx = knn(x[:,6:9], k=k)
-    
+        else:
+            idx = knn(x, k=k)
     if idx.get_device() == -1:
         idx_base = torch.arange(0, batch_size).view(-1,1,1)*num_points
     else:
@@ -212,11 +211,9 @@ class DGCNN_Seg_Encoder(nn.Module):
                                    nn.LeakyReLU(negative_slope=0.2))
 
     def forward(self, x):
-        x = x.transpose(2, 1)
+        x = x.transpose(2, 1)  #(batch_size, num_points, num_dims) -> (batch_size, num_dims, num_points)
 
         batch_size = x.size(0)
-        num_points = x.size(2)
-        num_dims = x.size(1)
 
         #x = get_graph_feature(x, k=self.k)     # (batch_size, 9, num_points) -> (batch_size, 9*2, num_points, k)
         #x = x.transpose(2, 1)                   # (batch_size, 9*2, num_points, k) -> (batch_size, num_points, 9,k)

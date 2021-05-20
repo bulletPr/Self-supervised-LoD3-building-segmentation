@@ -56,6 +56,7 @@ class Train_AE_Rotation(object):
         self.gpu_mode = args.gpu_mode
         self.model_path = args.model_path
         self.num_workers = args.num_workers
+        self.angle_number = args.num_angles
 
         # create output directory and files
         file = [f for f in self.model_path.split('/')]
@@ -123,6 +124,7 @@ class Train_AE_Rotation(object):
     def run(self):
         self.train_hist={
                'loss': [],
+                'acc': [],
                'per_epoch_time': [],
                'total_time': []}
         
@@ -156,6 +158,7 @@ class Train_AE_Rotation(object):
             if self.writer:
                 self.writer.add_scalar('Train Loss', self.train_hist['loss'][-1], epoch)
                 self.writer.add_scalar('Learning Rate', self._get_lr(), epoch)
+                self.writer.add_scalar('Train Accuracy', np.mean(self.train_hist['acc']), epoch)
             self._log_string("end epoch " + str(epoch) + ", training loss: " + str(self.train_hist['loss'][-1]))
         # finish all epochs
         self._snapshot(epoch+1)
@@ -171,11 +174,11 @@ class Train_AE_Rotation(object):
     def train_epoch(self, epoch):
         epoch_start_time = time.time()
         loss_buf = []
-        num_train = len(self.train_loader.dataset)
-        num_batch = int(num_train/self.batch_size)
-        self._log_string("total training nuber: " + str(num_train) + "total batch number: " + str(num_batch) + " .")
+        #num_train = len(self.train_loader.dataset)
+        #num_batch = int(num_train/self.batch_size)
+        #self._log_string("total training nuber: " + str(num_train) + "total batch number: " + str(num_batch) + " .")
         for iter, (pts, targets) in enumerate(self.train_loader):
-            self._log_string("batch idx: " + str(iter) + "/" + str(num_batch) + " in " + str(epoch) + "/" + str(self.epochs) + " epoch...")
+            #self._log_string("batch idx: " + str(iter) + "/" + str(num_batch) + " in " + str(epoch) + "/" + str(self.epochs) + " epoch...")
             pts = Variable(pts)
             targets = targets.long()
             if self.gpu_mode:
@@ -194,6 +197,10 @@ class Train_AE_Rotation(object):
             self.optimizer.step()
             loss_buf.append(loss.detach().cpu().numpy())
                 #update lr
+            rot_output = rot_output.view(-1, self.angle_number)  
+            pred_choice = rot_output.data.cpu().max(1)[1]
+            correct = pred_choice.eq(targets.data.cpu()).cpu().sum()
+            self._log_string('[%d: %d] | train loss: %f | train accuracy: %f' %(epoch+1, iter+1, np.mean(loss_buf), correct.item()/float(self.batch_size*self.angle_number)))
         if self.optimizer.param_groups[0]['lr'] > 1e-5:
             self.scheduler.step()
         if self.optimizer.param_groups[0]['lr'] < 1e-5:
@@ -203,6 +210,7 @@ class Train_AE_Rotation(object):
         epoch_time = time.time() - epoch_start_time
         self.train_hist['per_epoch_time'].append(epoch_time)
         self.train_hist['loss'].append(np.mean(loss_buf))
+        self.train_hist['acc'].append(np.mean(correct.item()/float(self.batch_size*self.angle_number)))
         self._log_string(f'Epoch {epoch+1}: Loss {np.mean(loss_buf)}, time {epoch_time:.4f}s')
         return np.mean(loss_buf)
 
@@ -217,7 +225,7 @@ class Train_AE_Rotation(object):
             else:
                 name = key
             new_state_dict[name] = val
-        save_dir = os.path.join(self.save_dir, self.dataset_name)
+        save_dir = os.path.join(self.save_dir, self.dataset)
         torch.save(new_state_dict, save_dir + "_" + str(epoch) + '.pkl')
         self._log_string(f"Save model to {save_dir}_{epoch}.pkl")
 
