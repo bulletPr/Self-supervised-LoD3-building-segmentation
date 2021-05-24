@@ -174,17 +174,12 @@ class Train_AE_Rotation(object):
     def train_epoch(self, epoch):
         epoch_start_time = time.time()
         loss_buf = []
-        #num_train = len(self.train_loader.dataset)
-        #num_batch = int(num_train/self.batch_size)
-        #self._log_string("total training nuber: " + str(num_train) + "total batch number: " + str(num_batch) + " .")
         for iter, (pts, targets) in enumerate(self.train_loader):
-            #self._log_string("batch idx: " + str(iter) + "/" + str(num_batch) + " in " + str(epoch) + "/" + str(self.epochs) + " epoch...")
             pts = Variable(pts)
             targets = targets.long()
             if self.gpu_mode:
                 pts = pts.cuda()
                 targets = targets.cuda()
-
             # forward
             self.optimizer.zero_grad()
             #input(bs, 2048, 3), rec_output(bs, 2025,3), rot_ouput(bs, 2048)
@@ -196,7 +191,7 @@ class Train_AE_Rotation(object):
             loss.backward()
             self.optimizer.step()
             loss_buf.append(loss.detach().cpu().numpy())
-                #update lr
+            #update lr
             rot_output = rot_output.view(-1, self.angle_number)  
             pred_choice = rot_output.data.cpu().max(1)[1]
             correct = pred_choice.eq(targets.data.cpu()).cpu().sum()

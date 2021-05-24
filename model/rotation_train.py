@@ -230,7 +230,6 @@ def rotate_train_epoch(epoch):
     num_batch = int(num_train/BATCH_SIZE)
     log_string("total training nuber: " + str(num_train) + "total batch number: " + str(num_batch) + " .")
     for iter, (pts, _) in enumerate(TRAIN_LOADER):
-        #log_string("batch idx: " + str(iter) + "/" + str(num_batch) + " in " + str(epoch) + "/" + str(MAX_EPOCH) + " epoch...")
         pts = Variable(pts)
         rotated_data, rotated_label = rotate_pc(current_data=pts, NUM_CLASSES = NUM_ANGLES)
         rotated_data = torch.from_numpy(rotated_data)
