@@ -73,7 +73,7 @@ parser.add_argument('--use_jitter', action='store_true',
                     help='Jitter the pointcloud before training')
 parser.add_argument('--use_shuffle', action='store_true',
                     help='Shuffle the pointcloud before training')
-parser.add_argument('--rec_loss', type=str, default='ChamferLoss', choices=['ChamferLoss_m','ChamferLoss'],
+parser.add_argument('--rec_loss', type=str, default='ChamferLoss_m', choices=['ChamferLoss_m','ChamferLoss'],
                     help='reconstruction loss')
 parser.add_argument('--batch_size', type=int, default=16, metavar='batch_size',
                     help='Size of batch)')
@@ -253,7 +253,7 @@ def rotate_train_epoch(epoch):
         rot_output = rot_output.view(-1, NUM_ANGLES)  
         pred_choice = rot_output.data.cpu().max(1)[1]
         correct = pred_choice.eq(rotated_label.data.cpu()).cpu().sum()
-        log_string('[%d: %d] | train loss: %f | train accuracy: %f' %(epoch+1, iter+1, np.mean(loss_buf), correct.item()/float(BATCH_SIZE*NUM_ANGLES)))
+        log_string('[%d: %d/%d] | train loss: %f | train accuracy: %f' %(epoch+1, iter+1, num_batch, np.mean(loss_buf), correct.item()/float(BATCH_SIZE*NUM_ANGLES)))
     if OPTIMIZER.param_groups[0]['lr'] > 1e-5:
         SCHEDULER.step()
     if OPTIMIZER.param_groups[0]['lr'] < 1e-5:
@@ -278,9 +278,9 @@ def snapshot(epoch):
         else:
             name = key
         new_state_dict[name] = val
-    SAVE_DIR = os.path.join(SAVE_DIR, DATASET)
-    torch.save(new_state_dict, SAVE_DIR + "_" + str(epoch) + '.pkl')
-    log_string(f"Save model to {SAVE_DIR}_{epoch}.pkl")
+    save_dir = os.path.join(SAVE_DIR, DATASET)
+    torch.save(new_state_dict, save_dir + "_" + str(epoch) + '.pkl')
+    log_string(f"Save model to {save_dir}_{epoch}.pkl")
 
 
 def load_pretrain(pretrain):
