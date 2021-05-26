@@ -248,7 +248,7 @@ def rotate_train_epoch(epoch):
         loss.backward()
         OPTIMIZER.step()
         loss_buf.append(loss.detach().cpu().numpy())
-            #update lr
+        #update lr
         rot_output = rot_output.view(-1, NUM_ANGLES)  
         pred_choice = rot_output.data.cpu().max(1)[1]
         correct = pred_choice.eq(rotated_label.data.cpu()).cpu().sum()

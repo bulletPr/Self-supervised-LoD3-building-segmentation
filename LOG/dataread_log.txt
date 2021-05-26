@@ -1,7 +1,0 @@
-Read datasets by load .h5 files, filelist: ./data/arch3_no_others_combined_1.5m_2048/train_data_files.txt
-Read datasets by load .h5 files, filelist: ./data/arch3_no_others_combined_1.5m_2048/train/train_data_files.txt
-Read datasets by load .h5 files, filelist: ./data/arch3_no_others_combined_1.5m_2048/train/train_data_files.txt
-Read datasets by load .h5 files, filelist: ./data/arch3_no_others_combined_1.5m_2048/train/train_data_files.txt
-Read datasets by load .h5 files, filelist: ./data/arch3_no_others_combined_1.5m_2048/train/train_data_files.txt
-Read datasets by load .h5 files, filelist: ./data/arch3_no_others_combined_1.5m_2048/train_data_files.txt
-size of all point_set: [(11713, 2048, 3),(11713, 2048)]
