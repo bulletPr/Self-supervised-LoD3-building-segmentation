@@ -245,7 +245,7 @@ class DGCNN_Seg_Encoder(nn.Module):
             x = x.max(dim=-1, keepdim=False)[0]     # (batch_size, emb_dims, num_points) -> (batch_size, emb_dims)
         #feat = x.unsqueeze(1)                   # (batch_size, emb_dims) -> (batch_size, 1, emb_dims) or (batch_size, 1, emb_dims*2)
 
-        return x, x4                             # (batch_size, emb_dims*2)
+        return x, x4                             # (batch_size, emb_dims*2), (batch_size, 64*3, num_points)
 
 
 
