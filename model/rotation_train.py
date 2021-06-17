@@ -119,7 +119,7 @@ if args.experiment_name != None:
 elif MODEL_PATH != '' and file[-2] == 'models':
     experiment_id = file[-3]
 else:
-    experiment_id = f"{args.task}_{args.dataset}_rot_angles_{args.num_angles}_sample_{args.sample}_block_size_{args.block_size}_{args.num_points}_point_dims_{args.num_dims}_feat_dims_{args.feat_dims}_batch_{args.batch_size}" 
+    experiment_id = f"AE_{args.task}_{args.dataset}_rot_angles_{args.num_angles}_sample_{args.sample}_block_size_{args.block_size}_{args.num_points}_point_dims_{args.num_dims}_feat_dims_{args.feat_dims}_batch_{args.batch_size}" 
 SAVE_DIR = os.path.join(ROOT_DIR, 'snapshot', experiment_id, 'models/')
 TBOARD_DIR = os.path.join(ROOT_DIR, 'tensorboard',experiment_id)
 WRITER = SummaryWriter(log_dir = TBOARD_DIR)
@@ -171,8 +171,9 @@ if GPU_MODE:
 
 # initialize optimizer
 PARAMETER = MODEL.parameters()
-OPTIMIZER = optim.Adam([{'params': PARAMETER, 'initial_lr': 1e-4}], lr=0.0001*16/BATCH_SIZE, weight_decay=1e-6)
+OPTIMIZER = optim.Adam([{'params': PARAMETER, 'initial_lr': 0.001}], lr=0.001, betas=[0.9,0.999], weight_decay=0.0005)
 SCHEDULER = optim.lr_scheduler.StepLR(OPTIMIZER, 20, 0.5, MAX_EPOCH)
+
 TRAIN_HIST={
        'loss': [],
         'acc': [],
