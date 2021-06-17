@@ -32,20 +32,14 @@ import torch.nn.functional as F
 # ----------------------------------------
 
 class SemSegNet(nn.Module):
-    def __init__(self, num_class, encoder, dropout=False, feat_dims=False):
+    def __init__(self, num_class, encoder, symmetric_function=1, dropout=False):
         super(SemSegNet, self).__init__()
         self.num_class = num_class
         self.dropout = dropout
-        if encoder == 'foldingnet':
-            if feat_dims: #512
-                self.conv1 = torch.nn.Conv1d(576, 512, 1)
-            else:
-                self.conv1 = torch.nn.Conv1d(1088, 512, 1)
+        if symmetric_function==1: #512
+            self.conv1 = torch.nn.Conv1d(704, 512, 1)
         else:
-            if feat_dims: #512
-                self.conv1 = torch.nn.Conv1d(704, 512, 1)
-            else:
-                self.conv1 = torch.nn.Conv1d(1216, 512, 1)
+            self.conv1 = torch.nn.Conv1d(1216, 512, 1)
         self.conv2 = torch.nn.Conv1d(512, 256, 1)
         self.conv3 = torch.nn.Conv1d(256, 128, 1)
         self.conv4 = torch.nn.Conv1d(128, self.num_class, 1)
@@ -58,9 +52,9 @@ class SemSegNet(nn.Module):
         batchsize = x.size()[0]
         n_pts = x.size()[2]
 
-        x = F.leak_relu(self.bn1(self.conv1(x)),negative_slope=0.2)
-        x = F.leak_relu(self.bn2(self.conv2(x)),negative_slope=0.2)
-        x = F.leak_relu(self.bn3(self.conv3(x)),negative_slope=0.2)
+        x = F.leaky_relu(self.bn1(self.conv1(x)),negative_slope=0.2)
+        x = F.leaky_relu(self.bn2(self.conv2(x)),negative_slope=0.2)
+        x = F.leaky_relu(self.bn3(self.conv3(x)),negative_slope=0.2)
         if self.dropout:
             x = self.dp1(x)
         x = self.conv4(x)

@@ -11,7 +11,7 @@
 #
 # ----------------------------------------------------------------------------------------------------------------------
 #
-#      YUWEI CAO - 2020/11/20 13:46 AM
+#      YUWEI CAO - 2021/5/31 09:16 AM
 #
 #
 
@@ -31,8 +31,7 @@ import torch.nn.functional as F
 import h5py
 from tensorboardX import SummaryWriter
 from torch.autograd import Variable
-from model import DGCNN_FoldNet
-from model_feat9 import DGCNN_FoldNet_feat
+from model import MultiTaskNet
 from semseg_net import SemSegNet
 
 
@@ -45,11 +44,8 @@ sys.path.append(ROOT_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'data_preprocessing'))
 import arch_dataloader
 
-sys.path.append(os.path.join(ROOT_DIR, 'utils'))
-from net_utils import Logger
-
-DATA_DIR = os.path.join(ROOT_DIR, 'data')
-
+DATA_DIR = os.path.join(ROOT_DIR, 'data')    
+    
 # ----------------------------------------
 # Load pretained model
 # ----------------------------------------
@@ -165,18 +161,14 @@ def main(opt):
     val_filelist = os.path.join(DATA_DIR, arch_data_dir, "val_data_files.txt")
     
     # load training data
-    train_dataset = arch_dataloader.get_dataloader(filelist=train_filelist, num_points=opt.num_points, batch_size=opt.batch_size, 
-                                                num_workers=4, num_dims=opt.num_dims, group_shuffle=False, shuffle=True, random_translate=opt.use_translate, drop_last=True)
+    train_dataset = arch_dataloader.get_dataloader(filelist=train_filelist, is_rotated=False, split='train', batch_size=opt.batch_size, num_workers=4, num_points=opt.num_points, num_dims=opt.num_dims, group_shuffle=False, random_translate=opt.use_translate, shuffle=False, drop_last=True)
     log_string("classifer set size: " + str(train_dataset.dataset.__len__()))
-    val_dataset = arch_dataloader.get_dataloader(filelist=val_filelist, num_points=opt.num_points, batch_size=opt.batch_size, 
-                                                num_workers=4, num_dims=opt.num_dims, group_shuffle=False, shuffle=False, random_translate=opt.use_translate, drop_last=False)
+    val_dataset = arch_dataloader.get_dataloader(filelist=val_filelist, is_rotated=False, split='train', num_points=opt.num_points, batch_size=opt.batch_size, num_workers=4, num_dims=opt.num_dims, group_shuffle=False, shuffle=False, random_translate=opt.use_translate, drop_last=False)
     log_string("classifer set size: " + str(val_dataset.dataset.__len__()))
 
     # load the model for point auto encoder    
     if opt.num_dims == 3:
-        ae_net = DGCNN_FoldNet(opt)
-    else:
-        ae_net = DGCNN_FoldNet_feat(opt)
+        ae_net = MultiTaskNet(opt)
     if opt.ae_model != '':
         ae_net = load_pretrain(ae_net, os.path.join(ROOT_DIR, opt.ae_model))
     if opt.gpu_mode:
@@ -184,11 +176,8 @@ def main(opt):
         ae_net = ae_net.cuda()
     ae_net=ae_net.eval()
  
-    #initial segmentation model
-    if opt.feat_dims == 512:      
-        sem_seg_net = SemSegNet(num_class=opt.n_classes, encoder=opt.encoder, dropout=opt.dropout, feat_dims=True, with_rgb=False)    
-    elif opt.feat_dims == 1024:
-        sem_seg_net = SemSegNet(num_class=opt.n_classes, encoder=opt.encoder, dropout=opt.dropout)
+    #initial segmentation model  
+    sem_seg_net = SemSegNet(num_class=opt.n_classes, encoder=opt.encoder, symmetric_function=opt.symmetric_function, dropout=opt.dropout)    
     #load pretrained model
     if opt.model != '':
         sem_seg_net = load_pretrain(sem_seg_net, opt.model)            
@@ -196,8 +185,8 @@ def main(opt):
     if opt.gpu_mode:
         sem_seg_net = sem_seg_net.cuda()       
     # initialize optimizer
-    optimizer = optim.Adam(sem_seg_net.parameters(), lr=0.01) 
-    scheduler = StepLR(optimizer, 20, 0.5, opt.epochs)
+    optimizer = optim.Adam([{'params': sem_seg_net.parameters(), 'initial_lr': 1e-4}], lr=0.01, weight_decay=1e-6) 
+    scheduler = optim.lr_scheduler.StepLR(optimizer, 20, 0.5, opt.n_epochs)
         
 # start training
     n_batch = 0
@@ -225,9 +214,8 @@ def main(opt):
             target = target.long()
             if opt.gpu_mode:
                 points_ = points_.cuda()
-            _, latent_caps, mid_features = ae_net(points_)
-            #reconstructions=reconstructions.data.cpu()
-            con_code = torch.cat([latent_caps.view(-1,opt.feat_dims,1).repeat(1,1,opt.num_points), mid_features],1).cpu().detach().numpy()
+            _, _, latent_caps, mid_features = ae_net(points_) # (batch_size, emb_dims*2), (batch_size, 64*3, num_points)
+            con_code = torch.cat([latent_caps.view(-1,opt.feat_dims*opt.symmetric_function,1).repeat(1,1,opt.num_points), mid_features],1).cpu().detach().numpy()
             latent_caps = torch.from_numpy(con_code).float()
             
             if(latent_caps.size(0)<opt.batch_size):
@@ -293,8 +281,8 @@ def main(opt):
                 target = target.long()
                 if opt.gpu_mode:
                     points_ = points_.cuda()
-                _, latent_caps, mid_features = ae_net(points_)
-                con_code = torch.cat([latent_caps.view(-1,opt.feat_dims,1).repeat(1,1,opt.num_points), mid_features],1).cpu().detach().numpy()
+                _, _, latent_caps, mid_features = ae_net(points_)
+                con_code = torch.cat([latent_caps.view(-1,opt.feat_dims*opt.symmetric_function,1).repeat(1,1,opt.num_points), mid_features],1).cpu().detach().numpy()
                 latent_caps = torch.from_numpy(con_code).float()
                 if(latent_caps.size(0)<opt.batch_size):
                     continue
@@ -351,14 +339,14 @@ def main(opt):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_epochs', type=int, default=200, help='number of epochs to train for')
-    parser.add_argument('--pre_ae_epochs', type=str, default='shapenetcorev2_best', help='choose which pre-trained ae to use')
+    parser.add_argument('--pre_ae_epochs', type=str, default='arch_50', help='choose which pre-trained ae to use')
     parser.add_argument('--batch_size', type=int, default=16, help='input batch size')
     parser.add_argument('--gpu_mode', action='store_true', help='Enables CUDA training')
     parser.add_argument('--num_points', type=int, default=2048, help='input point set size')
     parser.add_argument('--model', type=str, default='', help='model path')
     parser.add_argument('--dropout', action='store_true',
                         help='Enables dropout when training')
-    parser.add_argument('--ae_model', type=str, default='snapshot/Reconstruct_shapenet_foldingnet_1024/models/shapenetcorev2_best.pkl', 
+    parser.add_argument('--ae_model', type=str, default='snapshot/multitask_arch_rot_angles_4_sample_combined_block_size_5m_2048_point_dims_3_feat_dims_512_batch_4/models/arch_50.pkl', 
                         help='model path for the pre-trained ae network')
     parser.add_argument('--dataset', type=str, default='arch', help='dataset: s3dis, arch')
     parser.add_argument('--percentage', type=int, default=100, help='training cls with percent of training_data')
@@ -368,13 +356,17 @@ if __name__ == "__main__":
     parser.add_argument('--feat_dims', type=int, default=1024)
     parser.add_argument('--num_dims', type=int, default=3, metavar='N',
                         help='Number of dims for feature ')
-    parser.add_argument('--loss', type=str, default='ChamferLoss', choices=['ChamferLoss_m','ChamferLoss'],
+    parser.add_argument('--rec_loss', type=str, default='ChamferLoss', choices=['ChamferLoss_m','ChamferLoss'],
                         help='reconstruction loss')
     parser.add_argument('--use_translate', action='store_true', help='Enables CUDA training')
     parser.add_argument('--snapshot_interval', type=int, default=1, metavar='N',
                         help='Save snapshot interval ')
     parser.add_argument('--no_others', action='store_true', help='Enables CUDA training')
     parser.add_argument('--folder', '-f', help='path to data file')
+    parser.add_argument('--symmetric_function', type=int, default=2,
+                        help='symmetric function')
+    parser.add_argument('--num_angles', type=int, default=6, metavar='N',
+                        help='Number of rotation angles')
 
     opt = parser.parse_args()
     print(opt)
