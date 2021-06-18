@@ -48,7 +48,7 @@ parser.add_argument('--experiment_name', type=str, default=None, metavar='N',
                     help='Name of the experiment')
 parser.add_argument('--dropout', type=float, default=0.5,
                     help='dropout rate')
-parser.add_argument('--symmetric_function', type=int, default=2,
+parser.add_argument('--symmetric_function', type=int, default=1,
                     help='symmetric function')
 parser.add_argument('--task', type=str, default='multitask', metavar='N',
                     choices=['reconstruction', 'rotation_prediction','multitask'],
@@ -65,13 +65,13 @@ parser.add_argument('--dataset', type=str, default='arch', metavar='N',
 parser.add_argument('--split', type=str, default='train', metavar='N',
                     choices=['train','test'],
                     help='train or test')
-parser.add_argument('--use_rotate', action='store_true',
+parser.add_argument('--use_rotate', action='store_true', default=False,
                     help='Rotate the pointcloud before training')
-parser.add_argument('--use_translate', action='store_true',
+parser.add_argument('--use_translate', action='store_true', default=False,
                     help='Translate the pointcloud before training')
-parser.add_argument('--use_jitter', action='store_true',
+parser.add_argument('--use_jitter', action='store_true', default=False,
                     help='Jitter the pointcloud before training')
-parser.add_argument('--use_shuffle', action='store_true',
+parser.add_argument('--use_shuffle', action='store_true', default=False,
                     help='Shuffle the pointcloud before training')
 parser.add_argument('--rec_loss', type=str, default='ChamferLoss_m', choices=['ChamferLoss_m','ChamferLoss'],
                     help='reconstruction loss')
@@ -111,6 +111,44 @@ GPU_MODE = args.gpu_mode
 MODEL_PATH = args.model_path
 NUM_WORKERS = args.num_workers
 NUM_ANGLES = args.num_angles
+
+def snapshot(epoch):
+    state_dict = MODEL.state_dict()
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for key, val in state_dict.items():
+        if key[:6] == 'module':
+            name = key[7:]  # remove 'module.'
+        else:
+            name = key
+        new_state_dict[name] = val
+    save_dir = os.path.join(SAVE_DIR, DATASET)
+    torch.save(new_state_dict, save_dir + "_" + str(epoch) + '.pkl')
+    log_string(f"Save model to {save_dir}_{epoch}.pkl")
+
+
+def load_pretrain(pretrain):
+    state_dict = torch.load(pretrain, map_location='cpu')
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for key, val in state_dict.items():
+        if key[:6] == 'module':
+            name = key[7:]  # remove 'module.'
+        else:
+            name = key
+        new_state_dict[name] = val
+    MODEL.load_state_dict(new_state_dict)
+    log_string(f"Load model from {pretrain}")
+
+
+def get_lr(group=0):
+    return OPTIMIZER.param_groups[group]['lr']
+
+def log_string(out_str):
+    LOG_FOUT.write(out_str+'\n')
+    LOG_FOUT.flush()
+    print(out_str)
+
 
 # create output directory and files
 file = [f for f in MODEL_PATH.split('/')]
@@ -266,44 +304,6 @@ def rotate_train_epoch(epoch):
     TRAIN_HIST['acc'].append(np.mean(correct.item()/float(BATCH_SIZE*NUM_ANGLES)))
     log_string(f'Epoch {epoch+1}: Loss {np.mean(loss_buf)}, time {epoch_time:.4f}s')
     return np.mean(loss_buf)
-
-
-def snapshot(epoch):
-    state_dict = MODEL.state_dict()
-    from collections import OrderedDict
-    new_state_dict = OrderedDict()
-    for key, val in state_dict.items():
-        if key[:6] == 'module':
-            name = key[7:]  # remove 'module.'
-        else:
-            name = key
-        new_state_dict[name] = val
-    save_dir = os.path.join(SAVE_DIR, DATASET)
-    torch.save(new_state_dict, save_dir + "_" + str(epoch) + '.pkl')
-    log_string(f"Save model to {save_dir}_{epoch}.pkl")
-
-
-def load_pretrain(pretrain):
-    state_dict = torch.load(pretrain, map_location='cpu')
-    from collections import OrderedDict
-    new_state_dict = OrderedDict()
-    for key, val in state_dict.items():
-        if key[:6] == 'module':
-            name = key[7:]  # remove 'module.'
-        else:
-            name = key
-        new_state_dict[name] = val
-    MODEL.load_state_dict(new_state_dict)
-    log_string(f"Load model from {pretrain}")
-
-
-def get_lr(group=0):
-    return OPTIMIZER.param_groups[group]['lr']
-
-def log_string(out_str):
-    LOG_FOUT.write(out_str+'\n')
-    LOG_FOUT.flush()
-    print(out_str)
     
 
 if __name__ == "__main__":

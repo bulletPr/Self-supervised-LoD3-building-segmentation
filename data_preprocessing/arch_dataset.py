@@ -40,7 +40,7 @@ from pc_utils import load_sampled_h5_seg, load_rotated_h5, grouped_shuffle
 # ----------------------------------------
 
 class ArchDataset(Dataset):
-    def __init__(self, filelist, num_points=2048, num_dims =3, split='train', is_rotated=False, random_translate=False, random_rotate=False,
+    def __init__(self, filelist, num_points=2048, num_dims=3, split='train', is_rotated=False, random_translate=False, random_rotate=False,
             random_jitter=False, group_shuffle=False):
         self.random_translate = random_translate
         self.random_jitter = random_jitter
@@ -60,6 +60,7 @@ class ArchDataset(Dataset):
              self.data, self.seg_labels = load_rotated_h5(self.path_h5py_all)
         else:    
             self.data, self.seg_labels = load_sampled_h5_seg(self.path_h5py_all, self.num_dims, self.split)
+            
         if self.group_shuffle:
             self.data, self.seg_labels = grouped_shuffle([self.data, self.seg_labels])
         log_string("size of all point_set: [" + str(self.data.shape) + "," + str(self.seg_labels.shape) + "]")

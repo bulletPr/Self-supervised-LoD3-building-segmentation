@@ -307,7 +307,7 @@ class DGCNN_RT_Cls_Classifier(nn.Module):
     def __init__(self, args):
         super(DGCNN_RT_Cls_Classifier, self).__init__()
         self.output_channels = args.num_angles
-        self.linear1 = nn.Linear(args.feat_dims*2, 512, bias=False)  #(batch_size, 512)
+        self.linear1 = nn.Linear(args.feat_dims*args.symmetric_function, 512, bias=False)  #(batch_size, 512)
         self.bn6 = nn.BatchNorm1d(512)
         self.dp1 = nn.Dropout(p=args.dropout)
         self.linear2 = nn.Linear(512, 256) #(batch_size, 216)
